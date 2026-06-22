@@ -1,15 +1,23 @@
 const express = require('express');
 const cors = require('cors')
 const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs')
+const jwt = require('jsonwebtoken')
+require('dotenv').config();
+
 const app = express();
 
 const { initializeDatabase } = require('./db/db.connect');
 const Lead = require('./models/leadModel.models');
 const SalesAgent = require('./models/salesAgent.models');
 const Comment = require('./models/comment.models')
+const User = require('./models/user.models')
+
 app.use(cors())
 app.use(express.json());
 initializeDatabase();
+
+const JWT_SECRET = process.env.JWT_SECRET
 
 //delete after use//
 app.get('/', (req, res) => {
@@ -463,6 +471,136 @@ app.get("/report/status-distribution", async (req, res) => {
     });
   }
 });
+
+////////
+//JWT middleware
+
+const verifyJWT = (req, res, next) => {
+    const token = req.headers['authorization']
+    if(!token){
+        return res.status(401).json({ message: "No token provided." })
+    }
+
+    try{
+        const decodedToken = jwt.verify(token, JWT_SECRET)
+        req.user = decodedToken
+        next()
+    }catch(error){
+        return res.status(401).json({message: "Invalid token."})
+    }
+}
+
+//auth route for sign up
+
+app.post('/auth/signup', async(req, res) => {
+    try{
+        const { name, email, password } = req.body
+        if(!name || !email || !password){
+            return res.status(400).json({error: "All fields are required."})
+        }
+
+        const normalizedEmail = email.trim().toLowerCase()
+        const existingUser = await User.findOne({ email: normalizedEmail })
+
+        if(existingUser){
+            return res.status(409).json({error: "email already registered."})
+        }
+
+        const hashedPassword = await bcrypt.hash(password, 10)
+        
+        const newUser = new User({
+            name,
+            email: normalizedEmail,
+            password: hashedPassword
+        })
+
+        await newUser.save()
+        res.status(201).json({message: "User registered successfully."})
+
+    }catch(error){
+        if(error.code === 11000){
+            return res.status(409).json({error: "email already registered."})
+        }
+        res.status(500).json({error: "Signup failed", details: error.message})
+    }
+})
+
+//auth route for log in
+
+app.post('/auth/login', async (req, res) => {
+    try{
+        const {email, password} = req.body
+        if(!email || !password){
+            return res.status(400).json({error: "email and password required."})
+        }
+
+        const normalizedEmail = email.trim().toLowerCase()
+        const user = await User.findOne({ email: normalizedEmail }).select('+password')
+        if(!user) return res.status(401).json({error: "Invalid credentials."})
+
+        const isMatch = await bcrypt.compare(password, user.password)
+        if(!isMatch) return res.status(401).json({error: "Invalid credentials"})
+        
+        const token = jwt.sign({ userId: user._id, email: user.email }, JWT_SECRET, {expiresIn: '24h'})
+
+        res.json({message: "Login successfully", token})
+
+    }catch(error){
+        res.status(500).json({error: "Login failed", details: error.message})
+    }
+})
+
+//get authenticate user details
+
+app.get('/auth/me', verifyJWT, async(req, res) => {
+    try{
+        const user = await User.findById(req.user.userId).select('-password')
+        if(!user) return res.status(404).json({error: "user not found."})
+        res.json({user})
+    }catch(error){
+        res.status(500).json({error: "Failed to fetch user", details:  error.message})
+    }
+})
+
+//list of all user(owners)
+
+app.get('/users', async(req, res) => {
+    try{
+        const users = await User.find().select('-password')
+        if(users !== 0){
+            res.json(users)
+        }else{
+            res.status(404).json({error: "no users found."})
+        }
+
+    }catch(error){
+        res.status(500).json({error: "Failed to fetch users", details: error.message})
+    }
+})
+
+ //delete user by id
+async function deleteUser(id){
+    try{
+        const deletedUser = await User.findByIdAndDelete(id)
+        return deletedUser
+    }catch(error){
+        throw error
+    }
+}
+
+app.delete('/users/:id', async(req, res) => {
+    try{
+        const deletedUser = await deleteUser(req.params.id)
+        if(deletedUser){
+            res.status(200).json({message: "User deleted successfully."})
+        }else{
+            res.status(404).json({error: "User not found."})
+        }
+
+    }catch(error){
+        res.status(500).json({error: "Failed to delete user", details: error.message})
+    }
+})
 
 app.use((req, res) => {
   res.status(404).json({ error: 'Not found' });

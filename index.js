@@ -19,6 +19,8 @@ initializeDatabase();
 
 const JWT_SECRET = process.env.JWT_SECRET
 
+const toArray = (value) => (value == null ? value : Array.isArray(value) ? value : [value]);
+
 //delete after use//
 app.get('/', (req, res) => {
   res.json({ ok: true, message: 'Root from Express' });
@@ -50,10 +52,15 @@ app.post('/agents', async (req, res) => {
 });
 
 
-// 2. Create Lead - need to check code updated
+// 2. Create Lead 
 app.post('/leads', async (req, res) => {
     try {
-        const newLead = new Lead(req.body);
+        const leadData = {
+            ...req.body,
+            salesAgent: toArray(req.body.salesAgent),
+            tags: toArray(req.body.tags),
+        };
+        const newLead = new Lead(leadData);
 
         // Required fields validation
         if (!newLead.name) return res.status(400).json({ error: "'name' is required." });
@@ -139,25 +146,33 @@ app.put('/leads/:id', async (req, res) => {
             priority
         } = req.body;
 
+        const salesAgentList = toArray(salesAgent);
+        const tagsList = toArray(tags);
+
         if (!name) return res.status(400).json({ error: "'name' is required." });
         if (!source) return res.status(400).json({ error: "'source' is required." });
-        if (!salesAgent) return res.status(400).json({ error: "'salesAgent' is required." });
+        if (!salesAgentList || salesAgentList.length === 0)
+            return res.status(400).json({ error: "'salesAgent' is required." });
         if (!status) return res.status(400).json({ error: "'status' is required." });
-        if (!tags) return res.status(400).json({ error: "'tags' is required." });
+        if (!tagsList || tagsList.length === 0)
+            return res.status(400).json({ error: "'tags' is required." });
         if (!timeToClose) return res.status(400).json({ error: "'timeToClose' is required." });
         if (!priority) return res.status(400).json({ error: "'priority' is required." });
 
-        if (!mongoose.Types.ObjectId.isValid(salesAgent)) {
-            return res.status(400).json({ error: "Invalid 'salesAgent' ID format." });
-        }
-
-        const agentExists = await SalesAgent.findById(salesAgent);
-        if (!agentExists) {
-            return res.status(404).json({ error: `Sales agent with ID '${salesAgent}' not found.` });
+        for (let id of salesAgentList) {
+            if (!mongoose.Types.ObjectId.isValid(id)) {
+                return res.status(400).json({ error: `Invalid salesAgent ID: ${id}` });
+            }
+            const agentExists = await SalesAgent.findById(id);
+            if (!agentExists) {
+                return res.status(404).json({ error: `Sales agent with ID '${id}' not found.` });
+            }
         }
 
         const bodyWithUpdatedAt = {
             ...req.body,
+            salesAgent: salesAgentList,
+            tags: tagsList,
             updatedAt: Date.now()
         };
 
@@ -175,10 +190,10 @@ app.put('/leads/:id', async (req, res) => {
                 id: updatedLead._id,
                 name: updatedLead.name,
                 source: updatedLead.source,
-                salesAgent: {
-                    id: updatedLead.salesAgent?._id,
-                    name: updatedLead.salesAgent?.name
-                },
+                salesAgent: updatedLead.salesAgent?.map(agent => ({
+                    id: agent._id,
+                    name: agent.name
+                })) || [],
                 status: updatedLead.status,
                 tags: updatedLead.tags,
                 timeToClose: updatedLead.timeToClose,
@@ -472,6 +487,7 @@ app.get("/report/status-distribution", async (req, res) => {
   }
 });
 
+////////
 //JWT middleware
 
 const verifyJWT = (req, res, next) => {

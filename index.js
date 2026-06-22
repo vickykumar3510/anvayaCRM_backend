@@ -472,7 +472,6 @@ app.get("/report/status-distribution", async (req, res) => {
   }
 });
 
-////////
 //JWT middleware
 
 const verifyJWT = (req, res, next) => {
